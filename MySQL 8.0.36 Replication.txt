@@ -1,0 +1,215 @@
+############################## MySQL 8.0.36 Binary install ##############################
+[root@worker1 ~]# dnf remove mysql -y
+Mount       Size
+------     ------
+#/datafile   78GB
+[root@worker1 ~]# mkdir -p /datafile
+[root@worker1 ~]# cd /datafile/
+[root@worker1 datafile]# mkdir mysql8036
+[root@worker1 datafile]# mkdir rpm
+[root@worker1 datafile]# cd rpm
+[root@worker1 datafile]#
+[root@test-db dbteam]# dnf install unzip -y
+
+-- download mysql from
+#https://edelivery.oracle.com/osdc/faces/SoftwareDelivery
+
+[root@test-db dbteam]# unzip -q MySQL8.0.36.zip
+[root@worker1 datafile]# pwd
+/datafile/rpm
+
+dnf install mysql-commercial-client-plugins-8.0.36-1.1.el9.x86_64.rpm mysql-commercial-libs-8.0.36-1.1.el9.x86_64.rpm \
+mysql-commercial-client-8.0.36-1.1.el9.x86_64.rpm mysql-commercial-common-8.0.36-1.1.el9.x86_64.rpm \
+mysql-commercial-icu-data-files-8.0.36-1.1.el9.x86_64.rpm mysql-commercial-server-8.0.36-1.1.el9.x86_64.rpm
+
+[root@worker1 mysql8036]# mkdir /datafile/mysql8036
+[root@worker1 mysql8036]# mkdir /var/log/mysql
+[root@worker1 mysql8036]# mkdir /u04/relay_bin/
+[root@worker1 mysql8036]# mkdir /u04/log_bin/
+[root@worker1 mysql8036]# chown -R mysql:mysql /var/log/mysql /u04/relay_bin /u04/log_bin /datafile/mysql8036
+
+[root@worker1 mysql]# vi /etc/my.cnf
+[mysqld]
+
+# Server Identification and Replication
+server-id = 1 # 2/3
+bind-address = 192.168.141.129 # 130/131
+gtid-mode = ON
+enforce-gtid-consistency = ON
+
+# Connection and Thread Settings
+max_connections = 1000
+thread_cache_size = 100
+
+# Temporary Table Settings
+tmp_table_size = 256M
+max_heap_table_size = 256M
+max_allowed_packet = 256M
+
+# InnoDB Configuration
+innodb_file_per_table = 1
+innodb_buffer_pool_size = 3G  # 75-80% of available RAM
+innodb_redo_log_capacity=256M
+innodb_flush_log_at_trx_commit = 1
+innodb_flush_method = O_DIRECT
+innodb_doublewrite = 0
+innodb_autoextend_increment = 1
+innodb_thread_concurrency = 0
+innodb_io_capacity = 2000
+innodb_io_capacity_max = 4000
+innodb_flush_neighbors = 0
+innodb_lru_scan_depth = 100
+transaction-isolation = READ-COMMITTED
+
+# Data Directory
+datadir = /datafile/mysql8036
+
+# Binary Log Settings
+log-bin = /u04/log_bin/master-bin
+log-bin-index = /u04/log_bin/master-bin.index
+binlog_expire_logs_seconds = 604800 # 7days in seconds
+relay-log = /u04/relay_bin/relay-bin
+relay-log-index = /u04/relay_bin/relay-bin.index
+binlog_checksum = NONE
+log_replica_updates = ON
+sync_binlog = 1
+
+# Logging and Monitoring
+slow_query_log = 1
+long_query_time = 1
+slow_query_log_file = /var/log/mysql/slow-query.log
+log-error = /var/log/mysqld.log
+
+
+[root@test-db dbteam]#
+
+[root@test-db mysql8.0.35]# id mysql
+uid=27(mysql) gid=27(mysql) groups=27(mysql)
+[root@test-db mysql8.0.35]#
+
+--need to stop firewall
+vi /etc/selinux/config
+SELINUX=permissive
+
+tail -1000f /var/log/mysqld.log
+
+[root@worker1 mysql]# rpm -qa | grep mysql
+mysql-commercial-icu-data-files-8.0.36-1.1.el9.x86_64
+mysql-commercial-common-8.0.36-1.1.el9.x86_64
+mysql-commercial-client-plugins-8.0.36-1.1.el9.x86_64
+mysql-commercial-libs-8.0.36-1.1.el9.x86_64
+mysql-commercial-client-8.0.36-1.1.el9.x86_64
+mysql-commercial-server-8.0.36-1.1.el9.x86_64
+[root@worker1 mysql]#
+
+systemctl status mysqld
+systemctl start mysqld
+
+A temporary password is generated for root@localhost: 4K,(Suk4sslI
+
+mysql -u root -p
+4K,(Suk4sslI
+alter user root@localhost IDENTIFIED WITH caching_sha2_password BY 'test#12M';
+flush privileges;
+SELECT User, Host FROM mysql.user;
+
+############################## user,database & table partition Master Only ##############################
+[root@worker1 mysql]# mysql -u root -p
+test#12M
+
+CREATE DATABASE test1;
+
+USE test1;
+
+CREATE TABLE test1 (
+    id INT AUTO_INCREMENT,
+    name VARCHAR(50),
+    event_date DATE,
+    PRIMARY KEY (id, event_date)
+)
+PARTITION BY RANGE (DAY(event_date)) (
+    PARTITION p0 VALUES LESS THAN (1),
+    PARTITION p1 VALUES LESS THAN (2),
+    PARTITION p2 VALUES LESS THAN (3),
+    PARTITION pMAX VALUES LESS THAN MAXVALUE
+);
+
+CREATE USER 'test1'@'localhost' IDENTIFIED WITH caching_sha2_password BY 'test#12M';
+CREATE USER 'test1'@'192.168.141.1' IDENTIFIED WITH caching_sha2_password BY 'test#12M';
+CREATE USER 'root'@'192.168.141.1' IDENTIFIED WITH caching_sha2_password BY 'test#12M';
+
+GRANT ALL PRIVILEGES ON test1.* TO 'test1'@'localhost';
+GRANT ALL PRIVILEGES ON test1.* TO 'test1'@'192.168.141.1';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'192.168.141.1';
+
+FLUSH PRIVILEGES;
+
+EXIT;
+
+-- Insert data into the partition for '2022-02-01'
+INSERT INTO test1 (name, event_date) VALUES ('Ahosan', '2022-02-01');
+
+-- Insert data into the partition for '2022-02-02'
+INSERT INTO test1 (name, event_date) VALUES ('Habib', '2022-02-02');
+
+-- Select data from the partition for '2022-02-01'
+SELECT * FROM test1 WHERE event_date = '2022-02-01';
+
+-- Select data from the partition for '2022-02-02'
+SELECT * FROM test1 WHERE event_date = '2022-02-02';
+
+
+############################## Slave create ##############################
+-- on master
+[root@worker1 log_bin]# cd /datafile/rpm/
+
+mysql> SET @@GLOBAL.read_only = ON;
+
+create user 'repl_user'@'%' IDENTIFIED WITH 'mysql_native_password' BY 'test#12M';
+Grant replication slave on *.* to 'repl_user'@'%';
+
+FLUSH PRIVILEGES;
+
+mysql> show master status;
++-------------------+----------+--------------+------------------+-------------------------------------------+
+| File              | Position | Binlog_Do_DB | Binlog_Ignore_DB | Executed_Gtid_Set                         |
++-------------------+----------+--------------+------------------+-------------------------------------------+
+| master-bin.000005 |      352 |              |                  | 06d561e0-c4d4-11ee-a4fb-000c29bf5689:1-38 |
++-------------------+----------+--------------+------------------+-------------------------------------------+
+1 row in set (0.00 sec)
+mysql>
+
+show global variables like 'gtid_executed';
+
+mysqldump --all-databases -flush-privileges --single-transaction --flush-logs --triggers --routines --events -hex-blob --host=localhost --port=3306 --user=root  --password > mysqlbackup_dump.sql
+
+## transfer backup to slave
+-- on SLAVE
+mysql> show global variables like 'gtid_executed';
++---------------+------------------------------------------+
+| Variable_name | Value                                    |
++---------------+------------------------------------------+
+| gtid_executed | 5811addb-c522-11ee-b443-000c291a8021:1-2 |
++---------------+------------------------------------------+
+1 row in set (0.01 sec)
+
+mysql> source mysqlbackup_dump.sql;
+
+mysql> show global variables like 'gtid_executed';
+
+CHANGE MASTER TO
+MASTER_HOST = '192.168.141.129',
+MASTER_PORT = 3306,
+MASTER_USER = 'repl_user',
+MASTER_PASSWORD = 'test#12M',
+MASTER_AUTO_POSITION = 1;
+
+start slave;
+
+mysql> show slave status \G
+
+## on master
+SET @@GLOBAL.read_only = OFF;
+
+mysql> show master status\G
+
